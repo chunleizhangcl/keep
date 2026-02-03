@@ -194,6 +194,7 @@ def deduplicate(
     alert_copy = deepcopy(alert)
     for field in ignore_fields:
         remove_field(alert_copy, field)
+    # encode() defaults to UTF-8 for hashing consistency
     alert_hash = sha256(json.dumps(alert_copy, sort_keys=True).encode()).hexdigest()
     last_hash = last_hash_by_fingerprint.get(fingerprint)
     if last_hash == alert_hash:
