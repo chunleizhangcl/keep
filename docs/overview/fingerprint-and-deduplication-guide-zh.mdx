@@ -1,0 +1,733 @@
+---
+title: "Fingerprint与去重算法详解（中文）"
+sidebarTitle: "Fingerprint与去重详解"
+description: "详细解释Keep项目中Fingerprint的计算方式和alert_deduplicator模块的去重算法，以及如何在其他项目中复用"
+---
+
+# Keep 告警指纹（Fingerprint）与去重算法详解
+
+## 目录
+1. [Fingerprint（指纹）计算详解](#1-fingerprint指纹计算详解)
+2. [alert_deduplicator 去重算法详解](#2-alert_deduplicator-去重算法详解)
+3. [算法复用指南](#3-算法复用指南)
+
+---
+
+## 1. Fingerprint（指纹）计算详解
+
+### 1.1 什么是 Fingerprint？
+
+Fingerprint（指纹）是 Keep 用于唯一标识告警实例的哈希值。它的核心作用包括：
+
+- **去重（Deduplication）**：识别重复告警，减少告警噪音
+- **分组（Grouping）**：将相关告警归类在一起
+- **静默（Silencing）**：临时抑制特定指纹的告警
+- **可视化（Visualization）**：追踪告警历史和状态
+
+### 1.2 Fingerprint 计算流程图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Fingerprint 计算流程                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌──────────────┐                                                            │
+│  │  原始告警     │                                                            │
+│  │  (Raw Alert) │                                                            │
+│  └──────┬───────┘                                                            │
+│         │                                                                    │
+│         ▼                                                                    │
+│  ┌──────────────────────────────────────────┐                                │
+│  │ 1. 检查 Provider 的 FINGERPRINT_FIELDS   │                                │
+│  │    例如: Datadog: ["groups", "monitor_id"]│                                │
+│  │          PagerDuty: ["alert_key"]         │                                │
+│  │          Prometheus: ["fingerprint"]      │                                │
+│  └──────────────────┬───────────────────────┘                                │
+│                     │                                                        │
+│         ┌──────────┴──────────┐                                              │
+│         │                     │                                              │
+│         ▼                     ▼                                              │
+│  ┌─────────────┐       ┌─────────────────────┐                               │
+│  │ 有定义字段   │       │ 没有定义字段         │                               │
+│  └──────┬──────┘       └──────────┬──────────┘                               │
+│         │                         │                                          │
+│         ▼                         ▼                                          │
+│  ┌─────────────────────┐   ┌─────────────────────────┐                       │
+│  │ 2. 提取指定字段值    │   │ 2. 使用告警名称(name)   │                       │
+│  │    支持嵌套字段:     │   │    作为指纹             │                       │
+│  │    "labels.host"    │   │                         │                       │
+│  └──────────┬──────────┘   │    如果没有 name，      │                       │
+│             │              │    则使用整个 payload   │                       │
+│             ▼              └───────────┬─────────────┘                       │
+│  ┌─────────────────────┐               │                                     │
+│  │ 3. 将字段值拼接后    │               │                                     │
+│  │    进行 SHA256 哈希  │               │                                     │
+│  └──────────┬──────────┘               │                                     │
+│             │                          │                                     │
+│             ▼                          ▼                                     │
+│  ┌─────────────────────────────────────────────────────┐                     │
+│  │           4. 生成 Fingerprint (64位十六进制字符串)   │                     │
+│  │              例如: "a1b2c3d4e5f6..."                 │                     │
+│  └─────────────────────────────────────────────────────┘                     │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.3 核心代码解析
+
+Fingerprint 的计算逻辑主要在 `keep/providers/base/base_provider.py` 中：
+
+```python
+@staticmethod
+def get_alert_fingerprint(alert: AlertDto, fingerprint_fields: list = []) -> str:
+    """
+    计算告警的指纹值
+    
+    参数:
+        alert (AlertDto): 告警对象
+        fingerprint_fields (list): 用于计算指纹的字段列表
+    
+    返回:
+        str: 指纹的十六进制字符串
+    """
+    # 如果没有指定指纹字段，返回告警名称
+    if not fingerprint_fields:
+        return alert.name
+    
+    # 创建 SHA256 哈希对象
+    fingerprint = hashlib.sha256()
+    
+    # 将告警转换为字典
+    event_dict = alert.dict()
+    
+    # 遍历每个指纹字段
+    for fingerprint_field in fingerprint_fields:
+        # 支持嵌套字段访问，如 "labels.host"
+        keys = fingerprint_field.split(".")
+        fingerprint_field_value = event_dict
+        
+        # 递归获取嵌套字段值
+        for key in keys:
+            if isinstance(fingerprint_field_value, dict):
+                fingerprint_field_value = fingerprint_field_value.get(key, None)
+            else:
+                fingerprint_field_value = None
+                break
+        
+        # 处理列表和字典类型的值
+        if isinstance(fingerprint_field_value, (list, dict)):
+            fingerprint_field_value = json.dumps(fingerprint_field_value)
+        
+        # 将非空值加入哈希计算
+        if fingerprint_field_value is not None:
+            fingerprint.update(str(fingerprint_field_value).encode())
+    
+    return fingerprint.hexdigest()
+```
+
+### 1.4 各 Provider 的 FINGERPRINT_FIELDS 示例
+
+| Provider | FINGERPRINT_FIELDS | 说明 |
+|----------|-------------------|------|
+| Datadog | `["groups", "monitor_id"]` | 基于监控组和监控器ID |
+| PagerDuty | `["alert_key"]` | 基于告警唯一键 |
+| Prometheus | `["fingerprint"]` | 使用原生指纹 |
+| Grafana | `["fingerprint"]` | 使用原生指纹 |
+| Sentry | `["issue_id"]` | 基于问题ID |
+
+---
+
+## 2. alert_deduplicator 去重算法详解
+
+### 2.1 去重算法概述
+
+Keep 的去重算法包含两种模式：
+
+1. **部分去重（Partial Deduplication）**：基于指定字段识别相似告警
+2. **完全去重（Full Deduplication）**：基于告警全部内容（排除忽略字段）识别重复告警
+
+### 2.2 去重算法流程图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           Alert Deduplication 去重流程                           │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  ┌────────────────┐                                                              │
+│  │  新告警到达     │                                                              │
+│  │  (New Alert)   │                                                              │
+│  └───────┬────────┘                                                              │
+│          │                                                                       │
+│          ▼                                                                       │
+│  ┌────────────────────────────────────────────┐                                  │
+│  │ 1. 获取去重规则 (Deduplication Rules)       │                                  │
+│  │    - 优先使用自定义规则                      │                                  │
+│  │    - 否则使用默认规则                        │                                  │
+│  └───────────────────┬────────────────────────┘                                  │
+│                      │                                                           │
+│                      ▼                                                           │
+│  ┌────────────────────────────────────────────────────────────────────────┐      │
+│  │ 2. 应用去重规则                                                          │      │
+│  │    ┌─────────────────────────────────────────────────────────────┐     │      │
+│  │    │ a. 复制告警对象 (deep copy)                                   │     │      │
+│  │    └─────────────────────────────────────────────────────────────┘     │      │
+│  │    ┌─────────────────────────────────────────────────────────────┐     │      │
+│  │    │ b. 移除忽略字段 (ignore_fields)                              │     │      │
+│  │    │    默认忽略: lastReceived                                    │     │      │
+│  │    └─────────────────────────────────────────────────────────────┘     │      │
+│  │    ┌─────────────────────────────────────────────────────────────┐     │      │
+│  │    │ c. 计算告警哈希 (alert_hash)                                 │     │      │
+│  │    │    SHA256(JSON.dumps(alert, sort_keys=True))                │     │      │
+│  │    └─────────────────────────────────────────────────────────────┘     │      │
+│  └────────────────────────────────┬───────────────────────────────────────┘      │
+│                                   │                                              │
+│                                   ▼                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐      │
+│  │ 3. 从数据库获取相同 fingerprint 的上一条告警的 hash                      │      │
+│  │    get_last_alert_hashes_by_fingerprints(tenant_id, [fingerprint])     │      │
+│  └────────────────────────────────┬───────────────────────────────────────┘      │
+│                                   │                                              │
+│                    ┌──────────────┼──────────────┐                               │
+│                    │              │              │                               │
+│                    ▼              ▼              ▼                               │
+│           ┌───────────────┐ ┌───────────────┐ ┌─────────────────┐                │
+│           │ Hash 完全相同  │ │ 有相同指纹    │ │ 无相同指纹      │                │
+│           │               │ │ 但Hash不同   │ │                 │                │
+│           └───────┬───────┘ └───────┬───────┘ └────────┬────────┘                │
+│                   │                 │                  │                         │
+│                   ▼                 ▼                  ▼                         │
+│           ┌───────────────┐ ┌───────────────┐ ┌─────────────────┐                │
+│           │ 完全重复       │ │ 部分重复      │ │ 非重复          │                │
+│           │ isFullDuplicate│ │isPartialDup   │ │ 保存告警        │                │
+│           │ = True        │ │ = True        │ │                 │                │
+│           │ 丢弃告警      │ │ 保存告警      │ │                 │                │
+│           └───────────────┘ └───────────────┘ └─────────────────┘                │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.3 完整数据流图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              Keep 告警处理完整流程                                │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  ┌─────────────┐                                                                 │
+│  │ 外部监控系统 │  (Datadog, Prometheus, PagerDuty...)                          │
+│  └──────┬──────┘                                                                 │
+│         │ 推送/拉取告警                                                          │
+│         ▼                                                                        │
+│  ┌────────────────────────────────────────────────────────────────┐              │
+│  │                     Provider 模块                               │              │
+│  │  ┌─────────────────────────────────────────────────────────┐   │              │
+│  │  │ 1. _format_alert() - 格式化告警                          │   │              │
+│  │  │    - 提取告警字段                                        │   │              │
+│  │  │    - 标准化为 AlertDto                                   │   │              │
+│  │  └─────────────────────────────────────────────────────────┘   │              │
+│  │  ┌─────────────────────────────────────────────────────────┐   │              │
+│  │  │ 2. 计算 Fingerprint                                      │   │              │
+│  │  │    - 使用 FINGERPRINT_FIELDS 定义的字段                  │   │              │
+│  │  │    - SHA256 哈希生成唯一标识                             │   │              │
+│  │  └─────────────────────────────────────────────────────────┘   │              │
+│  └───────────────────────────────┬────────────────────────────────┘              │
+│                                  │                                               │
+│                                  ▼                                               │
+│  ┌────────────────────────────────────────────────────────────────┐              │
+│  │                   process_event_task 模块                       │              │
+│  │  ┌─────────────────────────────────────────────────────────┐   │              │
+│  │  │ 3. 维护窗口检查 (Maintenance Windows)                    │   │              │
+│  │  └─────────────────────────────────────────────────────────┘   │              │
+│  │  ┌─────────────────────────────────────────────────────────┐   │              │
+│  │  │ 4. AlertDeduplicator.apply_deduplication()              │   │              │
+│  │  │    - 获取去重规则                                        │   │              │
+│  │  │    - 计算 alert_hash                                     │   │              │
+│  │  │    - 对比历史告警                                        │   │              │
+│  │  │    - 标记 isFullDuplicate / isPartialDuplicate          │   │              │
+│  │  └─────────────────────────────────────────────────────────┘   │              │
+│  │  ┌─────────────────────────────────────────────────────────┐   │              │
+│  │  │ 5. 过滤完全重复告警                                      │   │              │
+│  │  │    保留: isFullDuplicate = False                         │   │              │
+│  │  │    丢弃: isFullDuplicate = True                          │   │              │
+│  │  └─────────────────────────────────────────────────────────┘   │              │
+│  └───────────────────────────────┬────────────────────────────────┘              │
+│                                  │                                               │
+│                                  ▼                                               │
+│  ┌────────────────────────────────────────────────────────────────┐              │
+│  │                      存储和后续处理                              │              │
+│  │  ┌─────────────────────────────────────────────────────────┐   │              │
+│  │  │ 6. 保存到数据库 (PostgreSQL/MySQL/SQLite)                │   │              │
+│  │  └─────────────────────────────────────────────────────────┘   │              │
+│  │  ┌─────────────────────────────────────────────────────────┐   │              │
+│  │  │ 7. 索引到 Elasticsearch (可选)                           │   │              │
+│  │  └─────────────────────────────────────────────────────────┘   │              │
+│  │  ┌─────────────────────────────────────────────────────────┐   │              │
+│  │  │ 8. 触发工作流 (Workflows)                                │   │              │
+│  │  └─────────────────────────────────────────────────────────┘   │              │
+│  │  ┌─────────────────────────────────────────────────────────┐   │              │
+│  │  │ 9. 运行规则引擎 (Rules Engine)                           │   │              │
+│  │  └─────────────────────────────────────────────────────────┘   │              │
+│  └────────────────────────────────────────────────────────────────┘              │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.4 去重算法核心代码解析
+
+```python
+class AlertDeduplicator:
+    
+    def _apply_deduplication_rule(
+        self,
+        alert: AlertDto,
+        rule: DeduplicationRuleDto,
+        last_alert_fingerprint_to_hash: dict[str, str] | None = None,
+    ) -> bool:
+        """
+        应用去重规则到告警
+        
+        步骤:
+        1. 深拷贝告警对象（避免修改原始数据）
+        2. 移除需要忽略的字段
+        3. 计算告警哈希
+        4. 与数据库中相同指纹的上一条告警的哈希进行对比
+        5. 设置去重标志
+        """
+        # 深拷贝，避免修改原始告警
+        alert_copy = copy.deepcopy(alert)
+        
+        # 移除忽略字段（默认忽略 lastReceived）
+        for field in rule.ignore_fields:
+            alert_copy = self._remove_field(field, alert_copy)
+        
+        # 计算告警哈希
+        # 使用 sort_keys=True 确保字段顺序一致
+        alert_hash = hashlib.sha256(
+            json.dumps(alert_copy.dict(), default=str, sort_keys=True).encode()
+        ).hexdigest()
+        alert.alert_hash = alert_hash
+        
+        # 获取相同指纹的上一条告警的哈希
+        last_alerts_hash_by_fingerprint = (
+            last_alert_fingerprint_to_hash
+            or get_last_alert_hashes_by_fingerprints(
+                self.tenant_id, [alert.fingerprint]
+            )
+        )
+        
+        # 判断去重类型
+        if (last_alerts_hash_by_fingerprint.get(alert.fingerprint)
+            and last_alerts_hash_by_fingerprint.get(alert.fingerprint) == alert_hash):
+            # 哈希完全相同 -> 完全重复
+            alert.isFullDuplicate = True
+        elif last_alerts_hash_by_fingerprint.get(alert.fingerprint):
+            # 有相同指纹但哈希不同 -> 部分重复
+            alert.isPartialDuplicate = True
+        # 否则为新告警，不做标记
+        
+        return alert
+```
+
+### 2.5 去重判断逻辑表
+
+| 条件 | isFullDuplicate | isPartialDuplicate | 处理方式 |
+|------|-----------------|-------------------|----------|
+| 相同 fingerprint + 相同 hash | True | False | 丢弃告警，仅更新 lastReceived |
+| 相同 fingerprint + 不同 hash | False | True | 保存告警，关联到同一告警组 |
+| 不同 fingerprint | False | False | 保存为新告警 |
+
+---
+
+## 3. 算法复用指南
+
+### 3.1 算法剥离
+
+Keep 的去重算法可以轻松剥离并在其他项目中使用。以下是一个独立的、可复用的实现：
+
+```python
+"""
+Keep Alert Deduplication Algorithm - 独立可复用版本
+
+该模块提供了一个通用的告警去重算法，可以在任何 Python 项目中使用。
+"""
+
+import copy
+import hashlib
+import json
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+
+@dataclass
+class Alert:
+    """告警数据模型"""
+    id: str
+    name: str
+    fingerprint: Optional[str] = None
+    alert_hash: Optional[str] = None
+    is_full_duplicate: bool = False
+    is_partial_duplicate: bool = False
+    data: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.data is None:
+            self.data = {}
+
+
+@dataclass
+class DeduplicationRule:
+    """去重规则"""
+    name: str
+    fingerprint_fields: List[str]  # 用于计算 fingerprint 的字段
+    ignore_fields: List[str]       # 计算 hash 时忽略的字段
+    full_deduplication: bool = True
+
+
+class AlertDeduplicator:
+    """
+    告警去重器
+    
+    使用方法:
+        deduplicator = AlertDeduplicator(fingerprint_fields=["service", "error_code"])
+        
+        # 处理第一个告警
+        alert1 = Alert(id="1", name="HighCPU", data={"service": "api", "cpu": 95})
+        result1 = deduplicator.process_alert(alert1)
+        
+        # 处理第二个告警（可能是重复的）
+        alert2 = Alert(id="2", name="HighCPU", data={"service": "api", "cpu": 96})
+        result2 = deduplicator.process_alert(alert2)
+    """
+    
+    def __init__(
+        self,
+        fingerprint_fields: List[str] = None,
+        ignore_fields: List[str] = None,
+    ):
+        """
+        初始化去重器
+        
+        Args:
+            fingerprint_fields: 用于计算 fingerprint 的字段列表
+            ignore_fields: 计算 hash 时忽略的字段列表（默认忽略 timestamp）
+        """
+        self.fingerprint_fields = fingerprint_fields or []
+        self.ignore_fields = ignore_fields or ["timestamp", "lastReceived"]
+        
+        # 存储历史告警的 hash（按 fingerprint 索引）
+        self._hash_store: Dict[str, str] = {}
+    
+    def calculate_fingerprint(self, alert: Alert) -> str:
+        """
+        计算告警的指纹
+        
+        Args:
+            alert: 告警对象
+            
+        Returns:
+            指纹的十六进制字符串
+        """
+        if not self.fingerprint_fields:
+            # 没有指定字段时，使用告警名称
+            return hashlib.sha256(alert.name.encode()).hexdigest()
+        
+        fingerprint = hashlib.sha256()
+        
+        for field in self.fingerprint_fields:
+            value = self._get_nested_value(alert.data, field)
+            if value is not None:
+                if isinstance(value, (list, dict)):
+                    value = json.dumps(value, sort_keys=True)
+                fingerprint.update(str(value).encode())
+        
+        return fingerprint.hexdigest()
+    
+    def calculate_hash(self, alert: Alert) -> str:
+        """
+        计算告警的完整哈希（用于完全去重）
+        
+        Args:
+            alert: 告警对象
+            
+        Returns:
+            哈希的十六进制字符串
+        """
+        # 复制数据并移除忽略字段
+        data_copy = copy.deepcopy(alert.data)
+        for field in self.ignore_fields:
+            self._remove_nested_value(data_copy, field)
+        
+        # 添加基本字段
+        hash_data = {
+            "name": alert.name,
+            "data": data_copy
+        }
+        
+        return hashlib.sha256(
+            json.dumps(hash_data, sort_keys=True, default=str).encode()
+        ).hexdigest()
+    
+    def process_alert(self, alert: Alert) -> Alert:
+        """
+        处理告警并进行去重判断
+        
+        Args:
+            alert: 待处理的告警
+            
+        Returns:
+            处理后的告警（带有去重标志）
+        """
+        # 计算 fingerprint
+        if alert.fingerprint is None:
+            alert.fingerprint = self.calculate_fingerprint(alert)
+        
+        # 计算 hash
+        alert.alert_hash = self.calculate_hash(alert)
+        
+        # 获取相同 fingerprint 的历史 hash
+        last_hash = self._hash_store.get(alert.fingerprint)
+        
+        if last_hash is not None and last_hash == alert.alert_hash:
+            # 完全重复
+            alert.is_full_duplicate = True
+        elif last_hash is not None:
+            # 部分重复（相同 fingerprint，不同 hash）
+            alert.is_partial_duplicate = True
+        
+        # 更新 hash 存储
+        self._hash_store[alert.fingerprint] = alert.alert_hash
+        
+        return alert
+    
+    def _get_nested_value(self, data: Dict, field: str) -> Any:
+        """获取嵌套字段的值"""
+        keys = field.split(".")
+        value = data
+        for key in keys:
+            if isinstance(value, dict):
+                value = value.get(key)
+            else:
+                return None
+        return value
+    
+    def _remove_nested_value(self, data: Dict, field: str) -> None:
+        """移除嵌套字段"""
+        keys = field.split(".")
+        if len(keys) == 1:
+            data.pop(field, None)
+        else:
+            parent = data
+            for key in keys[:-1]:
+                if isinstance(parent, dict):
+                    parent = parent.get(key, {})
+                else:
+                    return
+            if isinstance(parent, dict):
+                parent.pop(keys[-1], None)
+
+
+# ============== 使用示例 ==============
+
+def example_usage():
+    """使用示例"""
+    
+    # 创建去重器，指定用于计算 fingerprint 的字段
+    deduplicator = AlertDeduplicator(
+        fingerprint_fields=["service", "error_code"],
+        ignore_fields=["timestamp", "cpu_percent"]  # 这些字段的变化不算重复
+    )
+    
+    # 模拟告警流
+    alerts = [
+        Alert(id="1", name="HighCPU", data={
+            "service": "api-gateway",
+            "error_code": "E001",
+            "cpu_percent": 85,
+            "timestamp": "2024-01-01T10:00:00Z"
+        }),
+        Alert(id="2", name="HighCPU", data={
+            "service": "api-gateway",
+            "error_code": "E001",
+            "cpu_percent": 90,  # CPU 变了，但这是忽略字段
+            "timestamp": "2024-01-01T10:01:00Z"  # 时间变了，也是忽略字段
+        }),
+        Alert(id="3", name="HighCPU", data={
+            "service": "api-gateway",
+            "error_code": "E002",  # 错误码变了
+            "cpu_percent": 95,
+            "timestamp": "2024-01-01T10:02:00Z"
+        }),
+        Alert(id="4", name="HighCPU", data={
+            "service": "payment-service",  # 服务变了
+            "error_code": "E001",
+            "cpu_percent": 80,
+            "timestamp": "2024-01-01T10:03:00Z"
+        }),
+    ]
+    
+    print("=" * 60)
+    print("告警去重示例")
+    print("=" * 60)
+    print(f"Fingerprint 字段: {deduplicator.fingerprint_fields}")
+    print(f"忽略字段: {deduplicator.ignore_fields}")
+    print("=" * 60)
+    
+    for alert in alerts:
+        processed = deduplicator.process_alert(alert)
+        
+        status = "新告警"
+        if processed.is_full_duplicate:
+            status = "完全重复 (丢弃)"
+        elif processed.is_partial_duplicate:
+            status = "部分重复 (保留)"
+        
+        print(f"\n告警 {alert.id}: {alert.name}")
+        print(f"  数据: {alert.data}")
+        print(f"  Fingerprint: {alert.fingerprint[:16]}...")
+        print(f"  Hash: {alert.alert_hash[:16]}...")
+        print(f"  状态: {status}")
+
+
+if __name__ == "__main__":
+    example_usage()
+```
+
+### 3.2 算法复用架构图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           告警去重算法复用架构                                    │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────┐              │
+│  │                    AlertDeduplicator 核心类                      │              │
+│  ├────────────────────────────────────────────────────────────────┤              │
+│  │  属性:                                                          │              │
+│  │    - fingerprint_fields: List[str]  # 指纹计算字段              │              │
+│  │    - ignore_fields: List[str]       # 哈希忽略字段              │              │
+│  │    - _hash_store: Dict[str, str]    # 历史哈希存储              │              │
+│  ├────────────────────────────────────────────────────────────────┤              │
+│  │  方法:                                                          │              │
+│  │    + calculate_fingerprint(alert) -> str                       │              │
+│  │    + calculate_hash(alert) -> str                              │              │
+│  │    + process_alert(alert) -> Alert                             │              │
+│  └────────────────────────────────────────────────────────────────┘              │
+│                                    │                                             │
+│                    ┌───────────────┼───────────────┐                             │
+│                    │               │               │                             │
+│                    ▼               ▼               ▼                             │
+│  ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐         │
+│  │   内存存储后端       │ │   Redis 存储后端    │ │   数据库存储后端    │         │
+│  │   (默认)             │ │   (分布式场景)      │ │   (持久化场景)      │         │
+│  └─────────────────────┘ └─────────────────────┘ └─────────────────────┘         │
+│                                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐     │
+│  │                          集成方式                                         │     │
+│  │  ┌─────────────────────────────────────────────────────────────────┐    │     │
+│  │  │ 方式1: 直接使用                                                   │    │     │
+│  │  │   from deduplicator import AlertDeduplicator                    │    │     │
+│  │  │   dedup = AlertDeduplicator(fingerprint_fields=["service"])     │    │     │
+│  │  │   result = dedup.process_alert(alert)                           │    │     │
+│  │  └─────────────────────────────────────────────────────────────────┘    │     │
+│  │  ┌─────────────────────────────────────────────────────────────────┐    │     │
+│  │  │ 方式2: 作为中间件                                                 │    │     │
+│  │  │   @deduplication_middleware(fingerprint_fields=["service"])     │    │     │
+│  │  │   def handle_alert(alert):                                      │    │     │
+│  │  │       ...                                                        │    │     │
+│  │  └─────────────────────────────────────────────────────────────────┘    │     │
+│  │  ┌─────────────────────────────────────────────────────────────────┐    │     │
+│  │  │ 方式3: 流处理管道                                                 │    │     │
+│  │  │   alerts_stream                                                  │    │     │
+│  │  │     .pipe(DeduplicationStage(fingerprint_fields=["service"]))   │    │     │
+│  │  │     .pipe(StorageStage())                                       │    │     │
+│  │  └─────────────────────────────────────────────────────────────────┘    │     │
+│  └─────────────────────────────────────────────────────────────────────────┘     │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.3 分布式场景扩展
+
+对于分布式系统，可以将 hash 存储替换为 Redis：
+
+```python
+import redis
+from typing import Optional
+
+
+class RedisHashStore:
+    """Redis 后端的 Hash 存储"""
+    
+    def __init__(self, redis_url: str = "redis://localhost:6379", ttl: int = 86400):
+        self.redis = redis.from_url(redis_url)
+        self.ttl = ttl
+        self.key_prefix = "alert:hash:"
+    
+    def get(self, fingerprint: str) -> Optional[str]:
+        return self.redis.get(f"{self.key_prefix}{fingerprint}")
+    
+    def set(self, fingerprint: str, hash_value: str) -> None:
+        self.redis.setex(f"{self.key_prefix}{fingerprint}", self.ttl, hash_value)
+
+
+class DistributedAlertDeduplicator(AlertDeduplicator):
+    """支持分布式的告警去重器"""
+    
+    def __init__(
+        self,
+        redis_url: str,
+        fingerprint_fields: List[str] = None,
+        ignore_fields: List[str] = None,
+        ttl: int = 86400,
+    ):
+        super().__init__(fingerprint_fields, ignore_fields)
+        self._hash_store = RedisHashStore(redis_url, ttl)
+```
+
+### 3.4 关键配置参数
+
+| 参数 | 说明 | 默认值 | 建议 |
+|------|------|--------|------|
+| `fingerprint_fields` | 计算指纹的字段 | `[]` (使用名称) | 选择能唯一标识告警类型的字段 |
+| `ignore_fields` | 忽略的字段 | `["lastReceived"]` | 添加时间戳、计数器等变化字段 |
+| `ttl` (Redis) | Hash 缓存过期时间 | 86400秒 | 根据告警生命周期调整 |
+
+### 3.5 最佳实践
+
+1. **选择合适的 fingerprint_fields**
+   - 选择能够唯一标识告警"类型"的字段
+   - 避免选择经常变化的字段
+   - 示例：`["service", "alert_name", "host"]`
+
+2. **合理配置 ignore_fields**
+   - 忽略时间戳相关字段
+   - 忽略计数器、统计值等
+   - 示例：`["timestamp", "count", "cpu_percent"]`
+
+3. **存储后端选择**
+   - 单机：使用内存字典
+   - 多实例：使用 Redis
+   - 需要持久化：使用数据库
+
+4. **性能优化**
+   - 批量处理告警
+   - 使用连接池
+   - 合理设置缓存 TTL
+
+---
+
+## 总结
+
+Keep 的告警去重算法是一个两阶段的设计：
+
+1. **Fingerprint 阶段**：通过 Provider 定义的字段计算告警的唯一标识，用于将相同类型的告警归为一组。
+
+2. **Deduplication 阶段**：在同一 fingerprint 组内，通过完整 hash 比较判断告警是完全重复还是部分重复。
+
+这种设计的优势：
+- **灵活性**：可以针对不同 Provider 定制指纹计算规则
+- **准确性**：两阶段比较减少误判
+- **可扩展**：易于添加新的去重规则
+- **高性能**：使用 SHA256 哈希确保比较效率
+
+通过上述剥离的代码，您可以轻松地在自己的项目中实现类似的告警去重功能。
