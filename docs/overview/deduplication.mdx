@@ -164,11 +164,18 @@ Minimal reusable structure:
 import json
 from copy import deepcopy
 from hashlib import sha256
+from typing import Callable
 
 # remove_field should delete nested keys like "labels.instance" from alert_copy
 # (e.g., del alert_copy["labels"]["instance"] after checking "labels" exists).
 # Implement it in your project; Keep's version lives in AlertDeduplicator._remove_field.
-def deduplicate(alert, fingerprint, ignore_fields, last_hash_by_fingerprint, remove_field):
+def deduplicate(
+    alert: dict,
+    fingerprint: str,
+    ignore_fields: list[str],
+    last_hash_by_fingerprint: dict[str, str],
+    remove_field: Callable[[dict, str], None],
+):
     """Return (dedup_type, alert_hash) for the given alert.
 
     Args:
