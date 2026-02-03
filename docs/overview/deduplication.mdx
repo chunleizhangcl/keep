@@ -165,7 +165,8 @@ import json
 from copy import deepcopy
 from hashlib import sha256
 
-# remove_field should delete nested keys like "labels.instance" from alert_copy
+# remove_field should delete nested keys like "labels.instance" from alert_copy.
+# Implement it in your project; Keep's version lives in AlertDeduplicator._remove_field.
 def deduplicate(alert, fingerprint, ignore_fields, last_hash_by_fingerprint):
     alert_copy = deepcopy(alert)
     for field in ignore_fields:

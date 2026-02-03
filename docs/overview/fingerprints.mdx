@@ -45,7 +45,7 @@ They help prevent duplicates, group related alerts, enable silencing, and facili
 
 Keep sets `alert.fingerprint` in two layers (provider/custom rule first, then a fallback):
 
-1. **Provider/custom rule calculation**: Each provider can declare `FINGERPRINT_FIELDS`. During alert formatting, `BaseProvider.get_alert_fingerprint()` iterates those fields in order, walks nested keys (e.g., `labels.instance`), JSON-serializes list/dict values, and feeds each value into a SHA-256 hash. The resulting hex digest is used as the fingerprint. If the list is empty, it returns `alert.name`.
+1. **Provider/custom rule calculation**: Each provider can declare `FINGERPRINT_FIELDS`. During alert formatting, `BaseProvider.get_alert_fingerprint()` iterates those fields in order, walks nested keys (e.g., `labels.instance`), JSON-serializes list/dict values, and feeds each value (as UTF-8 bytes) into a SHA-256 hash. The resulting hex digest is used as the fingerprint. If the list is empty, it returns `alert.name`.
 2. **Alert fallback**: If a provider never sets a fingerprint, the `AlertDto` validator (`get_fingerprint`) hashes `alert.name` (or the full payload if `name` is missing). If a fingerprint string is supplied at model creation, it is truncated to 255 characters.
 3. **Custom deduplication rules**: When a custom rule defines `fingerprint_fields`, Keep recalculates the fingerprint with those fields after the provider formats the alert.
 
