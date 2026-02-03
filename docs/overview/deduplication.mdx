@@ -124,7 +124,7 @@ The logic in `keep/api/alert_deduplicator/alert_deduplicator.py` works as follow
 
 1. **Clone the alert** so the original is not mutated.
 2. **Remove ignore fields** (e.g., `lastReceived`) from the clone.
-3. **Compute alert hash** = `sha256(json.dumps(alert_copy, sort_keys=True))`.
+3. **Compute alert hash** = `sha256(json.dumps(alert_copy, sort_keys=True).encode())`.
 4. **Load last hash for the same fingerprint** from storage.
 5. **Compare**:
    - If last hash exists and equals current hash → **full duplicate** (`isFullDuplicate = True`).
