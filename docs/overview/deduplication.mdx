@@ -161,16 +161,16 @@ Yes. The algorithm is self-contained and can be reused in other projects if you 
 Minimal reusable structure:
 
 ```python
+import json
 from copy import deepcopy
 from hashlib import sha256
-import json
 
 # remove_field should delete nested keys like "labels.instance" from alert_copy
 def deduplicate(alert, fingerprint, ignore_fields, last_hash_by_fingerprint):
     alert_copy = deepcopy(alert)
     for field in ignore_fields:
         remove_field(alert_copy, field)
-    alert_hash = sha256(json.dumps(alert_copy, sort_keys=True)).hexdigest()
+    alert_hash = sha256(json.dumps(alert_copy, sort_keys=True).encode()).hexdigest()
     last_hash = last_hash_by_fingerprint.get(fingerprint)
     if last_hash == alert_hash:
         return "full", alert_hash
