@@ -171,11 +171,15 @@ from hashlib import sha256
 def deduplicate(alert, fingerprint, ignore_fields, last_hash_by_fingerprint):
     """Return (dedup_type, alert_hash) for the given alert.
 
-    alert: alert object/dict to check.
-    fingerprint: fingerprint string for grouping.
-    ignore_fields: list of field paths to exclude from hashing.
-    last_hash_by_fingerprint: dict mapping fingerprint -> last hash.
-    dedup_type: "full", "partial", or "none".
+    Args:
+        alert: Alert object/dict to check.
+        fingerprint: Fingerprint string for grouping.
+        ignore_fields: List of field paths to exclude from hashing.
+        last_hash_by_fingerprint: Dict mapping fingerprint -> last hash.
+
+    Returns:
+        tuple[str, str]: (dedup_type, alert_hash) where dedup_type is
+        "full", "partial", or "none".
     """
     alert_copy = deepcopy(alert)
     for field in ignore_fields:
