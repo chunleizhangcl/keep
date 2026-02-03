@@ -168,6 +168,13 @@ from hashlib import sha256
 # remove_field should delete nested keys like "labels.instance" from alert_copy.
 # Implement it in your project; Keep's version lives in AlertDeduplicator._remove_field.
 def deduplicate(alert, fingerprint, ignore_fields, last_hash_by_fingerprint):
+    """Return (dedup_type, alert_hash) for the given alert.
+
+    alert: alert object/dict to check.
+    fingerprint: fingerprint string for grouping.
+    ignore_fields: list of field paths to exclude from hashing.
+    last_hash_by_fingerprint: dict mapping fingerprint -> last hash.
+    """
     alert_copy = deepcopy(alert)
     for field in ignore_fields:
         remove_field(alert_copy, field)
