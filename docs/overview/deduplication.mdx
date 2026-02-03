@@ -169,7 +169,7 @@ from typing import Callable
 # remove_field should delete nested keys like "labels.instance" from alert_copy
 # (e.g., del alert_copy["labels"]["instance"] after checking "labels" exists).
 # Implement it in your project; Keep's version lives in AlertDeduplicator._remove_field,
-# and should skip deletions when parent keys are missing.
+# and should skip deletions when parent keys are missing (no errors if missing).
 def deduplicate(
     alert: dict,
     fingerprint: str,
