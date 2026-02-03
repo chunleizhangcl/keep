@@ -168,7 +168,8 @@ from typing import Callable
 
 # remove_field should delete nested keys like "labels.instance" from alert_copy
 # (e.g., del alert_copy["labels"]["instance"] after checking "labels" exists).
-# Implement it in your project; Keep's version lives in AlertDeduplicator._remove_field.
+# Implement it in your project; Keep's version lives in AlertDeduplicator._remove_field,
+# and should skip deletions when parent keys are missing.
 def deduplicate(
     alert: dict,
     fingerprint: str,
@@ -183,7 +184,8 @@ def deduplicate(
         fingerprint: Fingerprint string for grouping.
         ignore_fields: List of field paths to exclude from hashing.
         last_hash_by_fingerprint: Dict mapping fingerprint -> last hash.
-        remove_field: Callable[[dict, str], None] to delete nested keys from alert_copy.
+        remove_field: Callable[[dict, str], None] to delete nested keys from alert_copy,
+            using dot-separated paths like "labels.instance".
 
     Returns:
         tuple[str, str]: (dedup_type, alert_hash) where dedup_type is
