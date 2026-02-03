@@ -108,3 +108,75 @@ Keep's deduplication process follows these steps:
 2. **Enrichment**: After ingestion, each alert undergoes an enrichment process. This step adds additional context or information to the alert, enhancing its value and usefulness.
 
 3. **Deduplication**: Following enrichment, Keep's alert deduplicator comes into play. It applies the defined deduplication rules to the enriched alerts.
+
+### Does deduplication use provider fingerprints?
+
+Yes. The `AlertDeduplicator` compares alerts by **fingerprint first**, then by a content hash:
+
+- The **fingerprint** (from providers or custom rules) decides which alerts are in the same group.
+- The **content hash** (SHA-256 of the alert payload minus ignore fields) decides whether the alert is a *full* or *partial* duplicate.
+
+This means alerts with **different fingerprints are never compared**; only alerts that share the same fingerprint are deduplicated against each other.
+
+### Deduplication algorithm (implementation-level)
+
+The logic in `keep/api/alert_deduplicator/alert_deduplicator.py` works as follows for each incoming alert:
+
+1. **Clone the alert** so the original is not mutated.
+2. **Remove ignore fields** (e.g., `lastReceived`) from the clone.
+3. **Compute alert hash** = `sha256(json.dumps(alert_copy, sort_keys=True))`.
+4. **Load last hash for the same fingerprint** from storage.
+5. **Compare**:
+   - If last hash exists and equals current hash → **full duplicate** (`isFullDuplicate = True`).
+   - If last hash exists and differs → **partial duplicate** (`isPartialDuplicate = True`).
+   - If no previous hash exists → **not a duplicate**.
+
+```text
+Incoming alert
+   │
+   ├─ fingerprint (from provider/custom rule)
+   │
+   ├─ alert_copy = deepcopy(alert)
+   ├─ remove ignore_fields from alert_copy
+   ├─ alert_hash = sha256(json.dumps(alert_copy, sort_keys=True))
+   │
+   ├─ last_hash = get_last_alert_hashes_by_fingerprints(fingerprint)
+   │
+   ├─ if last_hash == alert_hash:
+   │       isFullDuplicate = True
+   ├─ elif last_hash exists:
+   │       isPartialDuplicate = True
+   └─ else:
+           not a duplicate
+```
+
+### Can this deduplication be extracted?
+
+Yes. The algorithm is self-contained and can be reused in other projects if you provide:
+
+- **A fingerprint function** (e.g., based on selected fields).
+- **A way to store and retrieve the last hash per fingerprint** (DB, Redis, cache).
+- **A list of ignore fields** for full-dedup comparison.
+
+Minimal reusable structure:
+
+```python
+def deduplicate(alert, fingerprint, ignore_fields, last_hash_by_fingerprint):
+    alert_copy = deepcopy(alert)
+    for field in ignore_fields:
+        remove_field(alert_copy, field)
+    alert_hash = sha256(json.dumps(alert_copy, sort_keys=True)).hexdigest()
+    last_hash = last_hash_by_fingerprint.get(fingerprint)
+    if last_hash == alert_hash:
+        return "full", alert_hash
+    if last_hash:
+        return "partial", alert_hash
+    return "none", alert_hash
+```
+
+In another system you would:
+
+1. Compute `fingerprint` from your event.
+2. Fetch the last hash for that fingerprint.
+3. Run the algorithm above.
+4. Store the new hash as the latest for that fingerprint.

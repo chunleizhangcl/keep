@@ -41,6 +41,27 @@ When Keep receives/gets an alert, it calculates the fingerprint for each alert t
 In summary, Keep alert fingerprints are essential for managing and organizing alerts in every third-party system.
 They help prevent duplicates, group related alerts, enable silencing, and facilitate analysis and visualization of alert data, ultimately aiding in the effective operation and maintenance of monitored systems.
 
+### How Keep calculates fingerprints
+
+Keep sets `alert.fingerprint` in two layers (provider/custom rule first, then a fallback):
+
+1. **Provider/custom rule calculation**: Each provider can declare `FINGERPRINT_FIELDS`. During alert formatting, `BaseProvider.get_alert_fingerprint()` iterates those fields in order, walks nested keys (e.g., `labels.instance`), JSON-serializes list/dict values, and feeds each value into a SHA-256 hash. The resulting hex digest is used as the fingerprint. If the list is empty, it returns `alert.name`.
+2. **Alert fallback**: If a provider never sets a fingerprint, the `AlertDto` validator (`get_fingerprint`) hashes `alert.name` (or the full payload if `name` is missing). If a fingerprint string is supplied at model creation, it is truncated to 255 characters.
+3. **Custom deduplication rules**: When a custom rule defines `fingerprint_fields`, Keep recalculates the fingerprint with those fields after the provider formats the alert.
+
+```text
+Provider event
+   │
+   ├─ format -> AlertDto(name, ...)
+   ├─ fingerprint_fields = FINGERPRINT_FIELDS or custom rule
+   ├─ BaseProvider.get_alert_fingerprint()
+   │     ├─ extract nested fields in order
+   │     ├─ json.dumps(list/dict values)
+   │     └─ SHA-256 -> hexdigest
+   └─ if fingerprint still None at creation:
+         AlertDto.get_fingerprint(name or payload) -> SHA-256
+```
+
 ### Examples
 
 This is the base provider class implementation for fingerprint fields:
