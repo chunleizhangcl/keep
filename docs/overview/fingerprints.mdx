@@ -1,70 +1,69 @@
 ---
-title: "Fingerprints"
-sidebarTitle: "Fingerprints"
-description: "Fingerprints are unique identifiers associated with alert instances in Keep. Every provider declares the fields fingerprints are calculated upon"
+title: "指纹"
+sidebarTitle: "指纹"
+description: "指纹是 Keep 中与告警实例关联的唯一标识。每个 provider 都声明用于计算指纹的字段"
 ---
 
 <Warning>
-  Fingerprints defaults to Alert Name if the provider does not declare
-  fingerprint fields.
+  如果 provider 未声明指纹字段，指纹默认使用告警名称。
 </Warning>
 
-Fingerprints serve several important purposes in the context of alerting within Keep:
+在 Keep 的告警场景中，指纹具有以下重要作用：
 
-### De-Duplication
+### 去重
 
-Alert fingerprints are used to prevent the duplication of enrichments/workflows triggering for the same underlying alert.
-When Keep receives an alert, it calculates a fingerprint based on the configured fields declared within the Provider.
-If two alerts have the same fingerprint, Keep considers them to be duplicates and will present one of them.
-This helps reduce alert noise and prevent unnecessary workflow triggers/enrichments.
+告警指纹用于避免对同一根本告警重复触发富化/工作流。
+当 Keep 接收到告警时，会基于 provider 中声明的字段计算指纹。
+如果两条告警具有相同指纹，Keep 会认为它们是重复告警并仅保留其中一条。
+这有助于降低告警噪音并避免不必要的工作流触发/富化。
 
-### Grouping
+### 分组
 
-Keep uses alert fingerprints to group related alerts together.
-Alerts with the same fingerprint are considered to be part of the same group, indicating that they are triggered by the same underlying condition or problem.
-Grouping alerts makes it easier for operators to understand relations between different alert-sources, the root cause of an issue and take appropriate action faster.
+Keep 使用告警指纹将相关告警进行分组。
+具有相同指纹的告警会被视为同一组，意味着它们由相同的底层条件或问题触发。
+告警分组可以帮助运维人员理解不同告警来源之间的关系、定位根因，并更快采取行动。
 
-### Silencing
+### 静默
 
-Alert fingerprints are used in third-party tools to manage silences/mutes.
-Silencing allows operators to temporarily suppress alerts with specific fingerprints, providing a way to acknowledge and handle known issues without generating additional notifications/triggers.
+告警指纹可用于第三方工具中的静默/屏蔽。
+静默允许运维人员临时抑制具有特定指纹的告警，从而在已知问题期间避免产生额外通知/触发。
 
-### Visualization
+### 可视化
 
-Alert fingerprints can also be used for visualization and analysis purposes.
-They help in tracking the history and status of alerts over time and provide a means to correlate alerts with specific conditions or changes in the monitored system.
+告警指纹也可用于可视化与分析。
+它们有助于跟踪告警随时间的历史与状态，并将告警与特定条件或系统变化进行关联。
 
-The process of generating a fingerprint involves hashing the fields configured in the provider and their values associated an alert instance.
-This results in a fixed-length, hexadecimal string that uniquely identifies that alert.
-When Keep receives/gets an alert, it calculates the fingerprint for each alert to determine if it should trigger a workflow, be grouped, or is silenced.
+指纹的生成过程是对 provider 中配置的字段及其在告警实例上的取值进行哈希。
+最终得到一个固定长度的十六进制字符串，用于唯一标识该告警。
+Keep 在接收/获取告警时，会为每条告警计算指纹，以判断是否触发工作流、参与分组或被静默。
 
-In summary, Keep alert fingerprints are essential for managing and organizing alerts in every third-party system.
-They help prevent duplicates, group related alerts, enable silencing, and facilitate analysis and visualization of alert data, ultimately aiding in the effective operation and maintenance of monitored systems.
+总之，Keep 的告警指纹是管理与组织各类第三方系统告警的关键机制。
+它能防止重复告警、实现分组、支持静默，并为分析与可视化提供基础，帮助更高效地运营与维护被监控系统。
 
-### How Keep calculates fingerprints
+### Keep 如何计算指纹
 
-Keep sets `alert.fingerprint` in two layers (provider/custom rule first, then a fallback):
+Keep 以两层方式设置 `alert.fingerprint`（优先 provider/自定义规则，其次回退逻辑）：
 
-1. **Provider/custom rule calculation**: Each provider can declare `FINGERPRINT_FIELDS`. During alert formatting, `BaseProvider.get_alert_fingerprint()` iterates those fields in order, walks nested keys (e.g., `labels.instance`), JSON-serializes list/dict values, and feeds each value (as UTF-8 bytes) into a SHA-256 hash. The resulting hex digest is used as the fingerprint. If the list is empty, it returns `alert.name`.
-2. **Alert fallback**: If a provider never sets a fingerprint, the `AlertDto` validator (`get_fingerprint`) hashes `alert.name` (or the full payload if `name` is missing). If a fingerprint string is supplied at model creation, it is truncated to 255 characters.
-3. **Custom deduplication rules**: When a custom rule defines `fingerprint_fields`, Keep recalculates the fingerprint with those fields after the provider formats the alert.
+1. **Provider/自定义规则计算**：每个 provider 可以声明 `FINGERPRINT_FIELDS`。在格式化告警时，`BaseProvider.get_alert_fingerprint()` 按顺序遍历这些字段，逐层访问嵌套键（如 `labels.instance`），对 list/dict 值进行 JSON 序列化，并将每个值（以 UTF-8 字节）输入 SHA-256 哈希。生成的十六进制摘要即为指纹。如果字段列表为空，则返回 `alert.name`。
+2. **告警回退**：如果 provider 未设置指纹，`AlertDto` 校验器（`get_fingerprint`）会对 `alert.name` 进行哈希（若 `name` 缺失则对完整 payload 哈希）。如果在模型创建时提供了指纹字符串，则会截断为 255 个字符。
+3. **自定义去重规则**：当自定义规则定义了 `fingerprint_fields` 时，Keep 会在 provider 格式化告警后使用这些字段重新计算指纹。
 
 ```text
-Provider event
+Provider 事件
    │
    ├─ format -> AlertDto(name, ...)
-   ├─ fingerprint_fields = FINGERPRINT_FIELDS or custom rule
+   ├─ fingerprint_fields = FINGERPRINT_FIELDS or 自定义规则
    ├─ BaseProvider.get_alert_fingerprint()
-   │     ├─ extract nested fields in order
+   │     ├─ 按顺序提取嵌套字段
    │     ├─ json.dumps(list/dict values)
    │     └─ SHA-256 -> hexdigest
-   └─ if fingerprint still None at creation:
-         AlertDto.get_fingerprint(name or payload) -> SHA-256
+   └─ 如果创建时 fingerprint 仍为 None:
+         AlertDto.get_fingerprint(name 或 payload) -> SHA-256
 ```
 
-### Examples
+### 示例
 
-This is the base provider class implementation for fingerprint fields:
+这是 base provider 类中指纹字段的定义：
 
 ```python base_provider.py
 class BaseProvider(metaclass=abc.ABCMeta):
@@ -74,7 +73,7 @@ class BaseProvider(metaclass=abc.ABCMeta):
     FINGERPRINT_FIELDS: list[str] = []
 ```
 
-This is Datadog's provider implementation for fingerprint fields, where we calculate fingerprint based on the event groups and monitor id, as an example:
+这是 Datadog provider 的指纹字段实现示例，我们基于事件的 groups 与 monitor id 计算指纹：
 
 ```python datadog_provider.py
 class DatadogProvider(BaseProvider):
@@ -91,8 +90,6 @@ class DatadogProvider(BaseProvider):
     FINGERPRINT_FIELDS = ["groups", "monitor_id"]
 ```
 
-<Card title="Customization" icon="lightbulb" iconType="duotone" color="#ca8b04">
-  Keep allows for customization in anything related with fingerprints. If you
-  want to change the way a specific provider calculates the fingerprint of an
-  alert, you can simply configure the fields you require.
+<Card title="自定义" icon="lightbulb" iconType="duotone" color="#ca8b04">
+  Keep 支持对指纹相关的行为进行定制。如果你想修改某个 provider 的指纹计算方式，只需配置所需的字段即可。
 </Card>

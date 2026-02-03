@@ -1,40 +1,42 @@
 ---
-title: "Deduplication"
+title: "去重"
 ---
 
-Alert deduplication is a crucial feature in Keep that helps reduce noise and streamline incident management by grouping similar alerts together. This process ensures that your team isn't overwhelmed by a flood of notifications for what is essentially the same issue, allowing for more efficient and focused incident response.
+告警去重是 Keep 的关键能力，用于通过将相似告警归并来降低噪音并简化事件管理。该过程确保团队不会被大量重复通知淹没，从而更高效、更专注地响应事件。
 
 <Frame width="100" height="200">
   <img height="10" src="/images/deduplication.png" />
 </Frame>
 
 
-## Glossary
+## 术语表
 
-- **Deduplication Rule**: A set of criteria used to determine if alerts should be grouped together.
-- **Partial Deduplication**: Correlates instances of alerts into single alerts, considering the case of the same alert with different statuses (e.g., firing and resolved). This is the default mode where specified fields are used to identify and group related alerts.
-- **Fingerprint Fields**: Specific alert attributes used to identify similar alerts.
-- **Full Deduplication**: A mode where alerts are considered identical if all fields match exactly (except those explicitly ignored). This helps avoid system overload by discarding duplicate alerts.
-- **Ignore Fields**: In full deduplication mode, these are fields that are not considered when comparing alerts.
+- **去重规则**：用于判断告警是否应归并的一组条件。
+- **部分去重**：将同一告警的不同实例关联为一条告警，考虑同一告警但状态不同（例如 firing 与 resolved）的情况。这是默认模式，使用指定字段识别并归并相关告警。
+- **指纹字段**：用于识别相似告警的特定告警属性。
+- **完全去重**：当除忽略字段外全部字段完全一致时，认为告警相同并丢弃重复告警，以避免系统负载过高。
+- **忽略字段**：在完全去重模式下，用于比较时排除的字段。
 
-## Deduplication Types
+## 去重类型
 
-### Partial Deduplication
-Partial deduplication allows you to specify certain fields (fingerprint fields) that are used to identify similar alerts. Alerts with matching values in these specified fields are considered duplicates and are grouped together. This method is flexible and allows for fine-tuned control over how alerts are deduplicated.
+### 部分去重
 
-Every provider integrated with Keep comes with pre-built partial deduplication rule tailored to that provider's specific alert format and common use cases.
-The default fingerprint fields defined using `FINGERPRINT_FIELDS` attributes in the provider code (e.g. [datadog provider](https://github.com/keephq/keep/blob/main/keep/providers/datadog_provider/datadog_provider.py#L188) or [gcp monitoring provider](https://github.com/keephq/keep/blob/main/keep/providers/gcpmonitoring_provider/gcpmonitoring_provider.py#L52)).
+部分去重允许你指定某些字段（指纹字段）来识别相似告警。具有这些字段相同值的告警会被视为重复并归并。该方式灵活，可精细控制去重策略。
 
-### Full Deduplication
-When full deduplication is enabled, Keep will also discard exact same events (excluding ignore fields). This mode considers all fields of an alert when determining duplicates, except for explicitly ignored fields.
+Keep 集成的每个 provider 都带有针对其告警格式和常见用例预置的部分去重规则。
+默认指纹字段通过 provider 代码中的 `FINGERPRINT_FIELDS` 属性定义（如 [datadog provider](https://github.com/keephq/keep/blob/main/keep/providers/datadog_provider/datadog_provider.py#L188) 或 [gcp monitoring provider](https://github.com/keephq/keep/blob/main/keep/providers/gcpmonitoring_provider/gcpmonitoring_provider.py#L52)）。
 
-By default, exact similar events excluding lastReceived time are fully deduplicated and discarded. This helps prevent system overload from repeated identical alerts.
+### 完全去重
 
-## Real Examples of Alerts and Results
+启用完全去重后，Keep 会丢弃完全相同的事件（忽略字段除外）。该模式会比较告警的所有字段（排除显式忽略字段），以判断是否为重复告警。
 
-### Example 1: Partial Deduplication
+默认情况下，除 `lastReceived` 外完全一致的事件会被完全去重并丢弃，从而避免系统因重复告警而过载。
 
-**Rule** - Deduplicate based on 'service' and 'error_message' fields.
+## 告警与结果示例
+
+### 示例 1：部分去重
+
+**规则** - 基于 `service` 与 `error_message` 字段去重。
 
 ```json
 # alert 1
@@ -60,15 +62,15 @@ By default, exact similar events excluding lastReceived time are fully deduplica
 }
 ```
 
-**Result**:
-- Alerts 1 and 2 are deduplicated into a single alert, fields are updated.
-- Alert 3 remains separate as it has a different service and error message.
+**结果**：
+- 告警 1 与 2 被去重为一条告警，字段会更新。
+- 告警 3 由于 service 与 error_message 不同而保持独立。
 
-### Example 2: Full Deduplication
+### 示例 2：完全去重
 
-**Rule**: Full deduplication with 'timestamp' as an ignore field
+**规则**：完全去重，并将 `timestamp` 设为忽略字段
 
-**Incoming Alerts**:
+**输入告警**：
 
 ```json
 
@@ -79,7 +81,7 @@ By default, exact similar events excluding lastReceived time are fully deduplica
     user_id: "12345",
     lastReceived: "2023-05-02T14:00:00Z"
 }
-# alert 2 (discarded as its identical)
+# alert 2（因为完全一致而被丢弃）
 {
     service: "api",
     error: "Rate limit exceeded",
@@ -95,50 +97,50 @@ By default, exact similar events excluding lastReceived time are fully deduplica
 }
 ```
 
-**Result**:
-- Alerts 1 and 2 are deduplicated as they are identical except for the ignored timestamp field.
-- Alert 3 remains separate due to the different user_id.
+**结果**：
+- 告警 1 与 2 在忽略 timestamp 后完全一致，因此被去重。
+- 告警 3 因 user_id 不同而保持独立。
 
-## How It Works
+## 工作原理
 
-Keep's deduplication process follows these steps:
+Keep 的去重流程包括以下步骤：
 
-1. **Alert Ingestion**: Every alert received by Keep is first ingested into the system.
+1. **告警接入**：Keep 首先接收并接入每条告警。
 
-2. **Enrichment**: After ingestion, each alert undergoes an enrichment process. This step adds additional context or information to the alert, enhancing its value and usefulness.
+2. **富化**：接入后，告警会经过富化流程，补充额外上下文信息。
 
-3. **Deduplication**: Following enrichment, Keep's alert deduplicator comes into play. It applies the defined deduplication rules to the enriched alerts.
+3. **去重**：富化完成后，告警去重器开始工作，对富化后的告警应用去重规则。
 
-### Does deduplication use provider fingerprints?
+### 去重是否使用 provider 指纹？
 
-Yes. The `AlertDeduplicator` compares alerts by **fingerprint first**, then by a content hash:
+是的。`AlertDeduplicator` 会先按**指纹**分组，再按内容哈希判断：
 
-- The **fingerprint** (from providers or custom rules) decides which alerts are in the same group.
-- The **content hash** (SHA-256 of the alert payload minus ignore fields) decides whether the alert is a *full* or *partial* duplicate.
+- **指纹**（来自 provider 或自定义规则）决定告警是否属于同一组。
+- **内容哈希**（对移除忽略字段后的告警 payload 做 SHA-256）决定是**完全重复**还是**部分重复**。
 
-This means alerts with **different fingerprints are never compared**; only alerts that share the same fingerprint are deduplicated against each other.
+这意味着 **指纹不同的告警永远不会互相比较**；只有具有相同指纹的告警才会进行去重判断。
 
-### Deduplication algorithm (implementation-level)
+### 去重算法（实现层面）
 
-The logic in `keep/api/alert_deduplicator/alert_deduplicator.py` works as follows for each incoming alert:
+`keep/api/alert_deduplicator/alert_deduplicator.py` 的逻辑对每条进入的告警执行如下步骤：
 
-1. **Clone the alert** so the original is not mutated.
-2. **Remove ignore fields** (e.g., `lastReceived`) from the clone.
-3. **Compute alert hash** = `sha256(json.dumps(alert_copy, sort_keys=True).encode())`.
-4. **Load last hash for the same fingerprint** from storage.
-5. **Compare**:
-   - If last hash exists and equals current hash → **full duplicate** (`isFullDuplicate = True`).
-   - If last hash exists and differs → **partial duplicate** (`isPartialDuplicate = True`).
-   - If no previous hash exists → **not a duplicate**.
+1. **克隆告警**，避免修改原始告警。
+2. **移除忽略字段**（例如 `lastReceived`）。
+3. **计算告警哈希** = `sha256(json.dumps(alert_copy, sort_keys=True).encode())`。
+4. **读取该指纹的上一条哈希**。
+5. **比较**：
+   - 若存在上一条哈希且相同 → **完全重复**（`isFullDuplicate = True`）。
+   - 若存在上一条哈希但不同 → **部分重复**（`isPartialDuplicate = True`）。
+   - 若无上一条哈希 → **非重复**。
 
 ```text
-Incoming alert
+进入的告警
    │
-   ├─ fingerprint (from provider/custom rule)
+   ├─ fingerprint（来自 provider/自定义规则）
    │
    ├─ alert_copy = deepcopy(alert)
-   ├─ remove ignore_fields from alert_copy
-   ├─ alert_hash = sha256(json.dumps(alert_copy, sort_keys=True))
+   ├─ 从 alert_copy 移除 ignore_fields
+   ├─ alert_hash = sha256(json.dumps(alert_copy, sort_keys=True).encode())
    │
    ├─ last_hash = get_last_alert_hashes_by_fingerprints(fingerprint)
    │
@@ -147,18 +149,18 @@ Incoming alert
    ├─ elif last_hash exists:
    │       isPartialDuplicate = True
    └─ else:
-           not a duplicate
+           非重复
 ```
 
-### Can this deduplication be extracted?
+### 去重算法能否剥离？
 
-Yes. The algorithm is self-contained and can be reused in other projects if you provide:
+可以。该算法是自包含的，只要提供以下能力即可复用：
 
-- **A fingerprint function** (e.g., based on selected fields).
-- **A way to store and retrieve the last hash per fingerprint** (DB, Redis, cache).
-- **A list of ignore fields** for full-dedup comparison.
+- **指纹函数**（例如基于指定字段生成指纹）。
+- **按指纹存取上一条哈希**的存储方式（DB、Redis、缓存等）。
+- **忽略字段列表**，用于完全去重对比。
 
-Minimal reusable structure:
+最小可复用结构：
 
 ```python
 import json
@@ -166,10 +168,10 @@ from copy import deepcopy
 from hashlib import sha256
 from typing import Callable
 
-# remove_field should delete nested keys like "labels.instance" from alert_copy
-# (e.g., del alert_copy["labels"]["instance"] after checking "labels" exists).
-# Implement it in your project; Keep's version lives in AlertDeduplicator._remove_field,
-# and should skip deletions when parent keys are missing (no errors if missing).
+# remove_field 应删除 alert_copy 中形如 "labels.instance" 的嵌套键
+#（例如在确认 "labels" 存在后执行 del alert_copy["labels"]["instance"]）。
+# 需在你的项目中实现；Keep 的实现位于 AlertDeduplicator._remove_field，
+# 当父级键不存在时应跳过删除（缺失不报错）。
 def deduplicate(
     alert: dict,
     fingerprint: str,
@@ -177,24 +179,24 @@ def deduplicate(
     last_hash_by_fingerprint: dict[str, str],
     remove_field: Callable[[dict, str], None],
 ):
-    """Return (dedup_type, alert_hash) for the given alert.
+    """返回 (dedup_type, alert_hash)。
 
-    Args:
-        alert: Alert object/dict to check.
-        fingerprint: Fingerprint string for grouping.
-        ignore_fields: List of field paths to exclude from hashing.
-        last_hash_by_fingerprint: Dict mapping fingerprint -> last hash.
-        remove_field: Callable[[dict, str], None] to delete nested keys from alert_copy,
-            using dot-separated paths like "labels.instance".
+    参数:
+        alert: 需要检查的告警对象/字典。
+        fingerprint: 用于分组的指纹字符串。
+        ignore_fields: 计算哈希时需要排除的字段路径列表。
+        last_hash_by_fingerprint: 指纹 -> 上一次哈希的映射。
+        remove_field: Callable[[dict, str], None]，用于从 alert_copy 删除嵌套键，
+            使用类似 "labels.instance" 的点分路径。
 
-    Returns:
-        tuple[str, str]: (dedup_type, alert_hash) where dedup_type is
-        "full", "partial", or "none".
+    返回:
+        tuple[str, str]: (dedup_type, alert_hash)，dedup_type 取值为
+        "full"、"partial" 或 "none"。
     """
     alert_copy = deepcopy(alert)
     for field in ignore_fields:
         remove_field(alert_copy, field)
-    # encode() defaults to UTF-8 for hashing consistency
+    # encode() 默认使用 UTF-8，确保哈希一致性
     alert_hash = sha256(json.dumps(alert_copy, sort_keys=True).encode()).hexdigest()
     last_hash = last_hash_by_fingerprint.get(fingerprint)
     if last_hash == alert_hash:
@@ -204,9 +206,9 @@ def deduplicate(
     return "none", alert_hash
 ```
 
-In another system you would:
+在其他系统中可以按照如下步骤使用：
 
-1. Compute `fingerprint` from your event.
-2. Fetch the last hash for that fingerprint.
-3. Run the algorithm above.
-4. Store the new hash as the latest for that fingerprint.
+1. 为事件计算 `fingerprint`。
+2. 获取该指纹的上一条哈希。
+3. 执行上述算法。
+4. 将当前哈希保存为该指纹的最新哈希。
